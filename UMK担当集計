@@ -1,0 +1,100 @@
+const MAIL_TO = "satorushimizu0420@outlook.jp";
+const MAIL_FROM = "UMK";
+const SHEET_NAME = "シフトデータ";
+
+function doGet(e) {
+  return handleRequest(e);
+}
+function doPost(e) {
+  return handleRequest(e);
+}
+
+function handleRequest(e) {
+  const params = e.parameter;
+  const action = params.action;
+  let result;
+  try {
+    if      (action === "load") result = loadData();
+    else if (action === "save") result = saveData(params.data);
+    else if (action === "mail") result = sendMonthlyReport();
+    else result = { error: "unknown action" };
+  } catch(err) {
+    result = { error: err.toString() };
+  }
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function loadData() {
+  const sheet = getSheet();
+  const cell = sheet.getRange("A1").getValue();
+  if (!cell) return { data: null };
+  return { data: cell };
+}
+
+function saveData(data) {
+  const sheet = getSheet();
+  sheet.getRange("A1").setValue(data);
+  return { success: true };
+}
+
+function getSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  return sheet;
+}
+
+function sendMonthlyReport() {
+  const sheet = getSheet();
+  const raw = sheet.getRange("A1").getValue();
+  if (!raw) return { error: "データがありません" };
+  const appData = JSON.parse(raw);
+  const now = new Date();
+  const targetDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth();
+  const monthStr = year + "年" + (month + 1) + "月";
+  const stores = appData.stores || [];
+  const shifts = appData.shifts || {};
+  const shiftTypes = appData.shiftTypes || [];
+  let body = "【UMK シフト集計】" + monthStr + "\n";
+  body += "送信日時：" + Utilities.formatDate(now, "Asia/Tokyo", "yyyy/MM/dd HH:mm") + "\n";
+  body += "━━━━━━━━━━━━━━━━━━━━━━\n\n";
+  stores.forEach(store => {
+    body += "■ " + store.name + "\n";
+    const storeShifts = shifts[store.id] || {};
+    store.staff.forEach(person => {
+      const arr = storeShifts[person.id] || [];
+      const days = new Date(year, month + 1, 0).getDate();
+      body += "\n  【" + person.name + "】\n";
+      const counts = {};
+      shiftTypes.forEach(t => { counts[t.key] = 0; });
+      counts[""] = 0;
+      for (let d = 0; d < days; d++) {
+        const code = arr[d] || "";
+        if (counts[code] !== undefined) counts[code]++;
+        else counts[code] = 1;
+      }
+      shiftTypes.forEach(t => {
+        if (counts[t.key] > 0) {
+          body += "    " + t.label + "（" + t.desc + "）: " + counts[t.key] + "日\n";
+        }
+      });
+      const emptyDays = counts[""] || 0;
+      if (emptyDays > 0) body += "    未入力: " + emptyDays + "日\n";
+    });
+    body += "\n";
+  });
+  body += "━━━━━━━━━━━━━━━━━━━━━━\n";
+  body += "※ このメールはUMKシフト管理システムから自動送信されています。";
+  GmailApp.sendEmail(MAIL_TO, "【UMK】" + monthStr + " シフト集計レポート", body, { name: MAIL_FROM });
+  return { success: true };
+}
+
+function checkAndSendMonthlyReport() {
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (tomorrow.getDate() === 1) sendMonthlyReport();
+}
